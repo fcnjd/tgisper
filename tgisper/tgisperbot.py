@@ -37,7 +37,6 @@ def main():
     except Exception as e:
         logger.error(f"Unhandled exception: {e}")
 
-
 @bot.message_handler(commands=["help", "start"])
 def send_welcome(message):
     """Send a welcome message in response to start/help commands."""
@@ -46,22 +45,14 @@ def send_welcome(message):
         "Hello! I'm a voice recognition bot 🎤 Send me a voice message and I'll transcribe it for you."
     )
 
-
 @bot.message_handler(content_types=["voice","audio"], chat_types=["private", "group", "supergroup"])
 def handle_audio_message(message):
-    """Handle voice messages by transcribing them."""
-    try:
-        voice_meta = bot.get_file(message.voice.file_id)
-        voice_audio = load_audio(bot.download_file(voice_meta.file_path))
-        segments, _ = model.transcribe(audio=voice_audio, vad_filter=True, beam_size=1)
-        text = "".join([segment.text for segment in segments])
-        split_length = 4096
-        for start in range(0, len(text), split_length):
-            bot.send_message(message.chat.id, text[start:start + split_length])
-    except Exception as e:
-        logger.error(f"Failed to process voice message: {e}")
-        bot.reply_to(message, "Sorry, an error occurred while processing your voice message.")
-
+    """Handle voice and audio messages by transcribing them."""
+    file_info = bot.get_file(getattr(message.voice or message.audio, 'file_id'))
+    file_path = file_info.file_path
+    file_downloaded = bot.download_file(file_path)
+    audio_data = load_audio(file_downloaded)
+    transcribe_and_send(message, audio_data)
 
 def load_audio(binary_file: BinaryIO, sr: int = SAMPLE_RATE) -> np.ndarray:
     """
@@ -80,6 +71,45 @@ def load_audio(binary_file: BinaryIO, sr: int = SAMPLE_RATE) -> np.ndarray:
         logger.error(f"Failed to load audio: {e.stderr.decode().strip()}")
         raise RuntimeError("Failed to load audio") from e
     return np.frombuffer(out, np.int16).astype(np.float32) / 32768.0
+
+@bot.message_handler(content_types=['video', 'video_note'], chat_types=["private", "group", "supergroup"])
+def handle_video_message(message):
+    file_info = bot.get_file(getattr(message.video or message.video_note, 'file_id'))
+    file_path = file_info.file_path
+    file_downloaded = bot.download_file(file_path)
+    audio_downloaded = convert_video_to_audio(file_downloaded)
+    audio_data = load_audio(audio_downloaded)
+    transcribe_and_send(message, audio_data)
+
+def convert_video_to_audio(video_data: bytes) -> np.ndarray:
+    try:
+        # Convert video to audio using ffmpeg
+        out, _ = (ffmpeg
+                  .input('pipe:0', threads=0)
+                  .output('pipe:1', format='s16le', acodec='pcm_s16le', ac=1, ar=SAMPLE_RATE)
+                  .run(cmd='ffmpeg', capture_stdout=True, capture_stderr=True, input=video_data))
+    except ffmpeg.Error as e:
+        logger.error(f"Failed to convert video to audio: {e.stderr.decode().strip()}")
+        raise RuntimeError("Failed to convert video to audio") from e
+    return np.frombuffer(out, np.int16).astype(np.float32) / 32768.0
+
+def transcribe_and_send(message, audio_data: np.ndarray):
+    try:
+        segments, _ = model.transcribe(audio=audio_data, vad_filter=True, beam_size=1)
+        text = "".join([segment.text for segment in segments])
+        split_and_send_message(text, message)
+    except Exception as e:
+        handle_transcription_error(e, message)
+
+def split_and_send_message(text: str, message):
+    split_length = 4096
+    for start in range(0, len(text), split_length):
+        bot.send_message(message.chat.id, text[start:start + split_length])
+
+def handle_transcription_error(e: Exception, message):
+    logger.error(f"Failed to process message: {e}")
+    # For security and simplicity, only a generic message is sent.
+    bot.reply_to(message, "Sorry, an error occurred while processing your message.")
 
 if __name__ == "__main__":
     main()
