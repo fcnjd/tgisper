@@ -54,23 +54,31 @@ def handle_audio_message(message):
     audio_data = load_audio(file_downloaded)
     transcribe_and_send(message, audio_data)
 
-def load_audio(binary_file: BinaryIO, sr: int = SAMPLE_RATE) -> np.ndarray:
+def load_audio(binary_file: BinaryIO, sr: int = SAMPLE_RATE):
     """
     Read an audio file object as mono waveform, resampling as necessary.
+    Modified from https://github.com/openai/whisper/blob/main/whisper/audio.py
+    to accept a binary object.
+
 
     :param binary_file: The audio file like object.
     :param sr: The sample rate to resample the audio if necessary.
     :return: A NumPy array containing the audio waveform.
     """
     try:
-        out, _ = (ffmpeg
-                  .input("pipe:0", format="s16le")
-                  .output("pipe:1", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
-                  .run(cmd="ffmpeg", capture_stdout=True, capture_stderr=True, input=binary_file))
+        # This launches a subprocess to decode audio while down-mixing and
+        # resampling as necessary.
+        # Requires the ffmpeg CLI and `ffmpeg-python` package to be installed.
+        out, _ = (
+            ffmpeg.input("pipe:", threads=0)
+            .output("-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
+            .run(cmd="ffmpeg", capture_stdout=True, capture_stderr=True, input=binary_file)
+        )
     except ffmpeg.Error as e:
         logger.error(f"Failed to load audio: {e.stderr.decode().strip()}")
-        raise RuntimeError("Failed to load audio") from e
-    return np.frombuffer(out, np.int16).astype(np.float32) / 32768.0
+        raise RuntimeError(f"Failed to load audio: {e.stderr.decode()}") from e
+
+    return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
 
 @bot.message_handler(content_types=['video', 'video_note'], chat_types=["private", "group", "supergroup"])
 def handle_video_message(message):
