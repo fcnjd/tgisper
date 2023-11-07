@@ -101,10 +101,14 @@ def transcribe_and_send(message, audio_data: np.ndarray):
     except Exception as e:
         handle_transcription_error(e, message)
 
+# Check if the message is too long and split it into multiple messages if necessary
 def split_and_send_message(text: str, message):
     split_length = 4096
+    if len(text) <= split_length:
+        bot.reply_to(message, text)
+        return
     for start in range(0, len(text), split_length):
-        bot.send_message(message.chat.id, text[start:start + split_length])
+        bot.reply_to(message, text[start:start+split_length])
 
 def handle_transcription_error(e: Exception, message):
     logger.error(f"Failed to process message: {e}")
