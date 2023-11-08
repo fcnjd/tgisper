@@ -11,8 +11,8 @@ from telebot.apihelper import ApiException
 
 # Configure logging
 logging.basicConfig()
+logging.getLogger("faster_whisper").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
-logger.getLogger("faster_whisper").setLevel(logging.DEBUG)
 
 # Constants
 SAMPLE_RATE = 16000
