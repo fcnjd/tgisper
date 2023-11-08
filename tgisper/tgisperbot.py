@@ -10,8 +10,13 @@ from faster_whisper import WhisperModel
 from telebot.apihelper import ApiException
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig()
 logger = logging.getLogger(__name__)
+logger.getLogger("faster_whisper").setLevel(logging.DEBUG)
+
+# Constants
+SAMPLE_RATE = 16000
+MAX_MESSAGE_LENGTH = 4096
 
 # Load configuration from environment variables
 bot_id = os.getenv("BOT_ID")
@@ -20,11 +25,11 @@ if not bot_id:
     sys.exit(1)
 
 model_name = os.getenv("ASR_MODEL", "small")
+compute_type = os.getenv("COMPUTE_TYPE", "INT8")
 
 # Initialize the bot and model
 bot = telebot.TeleBot(bot_id)
-model = WhisperModel(model_name, device="cpu", compute_type="float32")
-SAMPLE_RATE = 16000
+model = WhisperModel(model_name, device="cpu", compute_type=compute_type)
 
 
 def main():
@@ -103,20 +108,38 @@ def convert_video_to_audio(video_data: bytes) -> np.ndarray:
 
 def transcribe_and_send(message, audio_data: np.ndarray):
     try:
-        segments, _ = model.transcribe(audio=audio_data, vad_filter=True, beam_size=1)
-        text = "".join([segment.text for segment in segments])
-        split_and_send_message(text, message)
+        # Transcribe and request word timestamps
+        segments, _ = model.transcribe(
+            audio=audio_data,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=1000),
+            beam_size=5,
+            word_timestamps=True)
+        # Initialize an empty message to build our transcription
+        full_transcript = ""
+        last_message = None
+        # Process segments and append words to the full transcription
+        for segment in segments:
+            for word in segment.words:
+                # Build the string for the current word with timestamps
+                word_str = "[{:.2f}s -> {:.2f}s] {}".format(word.start, word.end, word.word)
+                # Check if adding the next word exceeds the Telegram message limit
+                if len(full_transcript) + len(word_str) < MAX_MESSAGE_LENGTH:
+                    full_transcript += word_str + " "
+                else:
+                    # If limit reached, send a new message
+                    last_message = bot.reply_to(message, text=full_transcript)
+                    full_transcript = word_str + " " # Start a new message with the current word
+        # If the transcript contains data, send or edit the last message.
+        if full_transcript:
+            if last_message:
+                bot.edit_message_text(chat_id=last_message.chat.id,
+                                      message_id=last_message.message_id,
+                                      text=full_transcript)
+            else:
+                bot.reply_to(message, text=full_transcript)
     except Exception as e:
         handle_transcription_error(e, message)
-
-# Check if the message is too long and split it into multiple messages if necessary
-def split_and_send_message(text: str, message):
-    split_length = 4096
-    if len(text) <= split_length:
-        bot.reply_to(message, text)
-        return
-    for start in range(0, len(text), split_length):
-        bot.reply_to(message, text[start:start+split_length])
 
 def handle_transcription_error(e: Exception, message):
     logger.error(f"Failed to process message: {e}")
