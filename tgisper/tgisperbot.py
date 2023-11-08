@@ -10,7 +10,7 @@ from faster_whisper import WhisperModel
 from telebot.apihelper import ApiException
 
 # Configure logging
-logging.basicConfig()
+logging.basicConfig(level=logging.INFO)
 logging.getLogger("faster_whisper").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,8 @@ def convert_video_to_audio(video_data: bytes) -> np.ndarray:
 
 def transcribe_and_send(message, audio_data: np.ndarray):
     try:
+        # Log the start event
+        logger.info(f"Transcribing message {message.message_id} in chat {message.chat.id}")
         # Transcribe and request word timestamps
         segments, _ = model.transcribe(
             audio=audio_data,
@@ -116,28 +118,28 @@ def transcribe_and_send(message, audio_data: np.ndarray):
             beam_size=5,
             word_timestamps=True)
         # Initialize an empty message to build our transcription
-        full_transcript = ""
-        last_message = None
+        message_transcript = ""
+        last_message = bot.reply_to(message, "*")
         # Process segments and append words to the full transcription
         for segment in segments:
             for word in segment.words:
-                # Build the string for the current word with timestamps
-                word_str = "[{:.2f}s -> {:.2f}s] {}".format(word.start, word.end, word.word)
+                # Build the string for the current word
+                word_str = word.word
                 # Check if adding the next word exceeds the Telegram message limit
-                if len(full_transcript) + len(word_str) < MAX_MESSAGE_LENGTH:
-                    full_transcript += word_str + " "
+                if len(message_transcript) + len(word_str) < MAX_MESSAGE_LENGTH:
+                    message_transcript += word_str
+                    bot.edit_message_text(chat_id=last_message.chat.id,
+                                      message_id=last_message.message_id,
+                                      text=message_transcript)
                 else:
                     # If limit reached, send a new message
-                    last_message = bot.reply_to(message, text=full_transcript)
-                    full_transcript = word_str + " " # Start a new message with the current word
-        # If the transcript contains data, send or edit the last message.
-        if full_transcript:
-            if last_message:
-                bot.edit_message_text(chat_id=last_message.chat.id,
-                                      message_id=last_message.message_id,
-                                      text=full_transcript)
-            else:
-                bot.reply_to(message, text=full_transcript)
+                    message_transcript = word_str   # Start a new message with the current word
+                    last_message = bot.reply_to(message, text=message_transcript)
+        # Inform the user that the transcription has finished
+        bot.send_message(message.chat.id, "Transcription complete.")
+        # Log the finish event
+        logger.info(f"Transcription complete for message {message.message_id} in chat {message.chat.id}")
+
     except Exception as e:
         handle_transcription_error(e, message)
 
