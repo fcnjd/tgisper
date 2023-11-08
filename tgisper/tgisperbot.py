@@ -25,7 +25,7 @@ if not bot_id:
     sys.exit(1)
 
 model_name = os.getenv("ASR_MODEL", "small")
-compute_type = os.getenv("COMPUTE_TYPE", "INT8")
+compute_type = os.getenv("COMPUTE_TYPE", "int8")
 
 # Initialize the bot and model
 bot = telebot.TeleBot(bot_id)
