@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # Constants
 SAMPLE_RATE = 16000
 MAX_MESSAGE_LENGTH = 4096
+STREAM_ENABLED = False # We set this to false since we don't yet handle the too many requests Exception
 
 # Load configuration from environment variables
 bot_id = os.getenv("BOT_ID")
@@ -57,7 +58,7 @@ def handle_audio_message(message):
     file_path = file_info.file_path
     file_downloaded = bot.download_file(file_path)
     audio_data = load_audio(file_downloaded)
-    transcribe_and_send(message, audio_data)
+    transcribe(message, audio_data)
 
 def load_audio(binary_file: BinaryIO, sr: int = SAMPLE_RATE):
     """
@@ -92,7 +93,7 @@ def handle_video_message(message):
     file_downloaded = bot.download_file(file_path)
     audio_downloaded = convert_video_to_audio(file_downloaded)
     audio_data = load_audio(audio_downloaded)
-    transcribe_and_send(message, audio_data)
+    transcribe(message, audio_data)
 
 def convert_video_to_audio(video_data: bytes) -> np.ndarray:
     try:
@@ -106,8 +107,7 @@ def convert_video_to_audio(video_data: bytes) -> np.ndarray:
         raise RuntimeError("Failed to convert video to audio") from e
     return np.frombuffer(out, np.int16).astype(np.float32) / 32768.0
 
-def transcribe_and_send(message, audio_data: np.ndarray):
-    try:
+def transcribe(message, audio_data: np.ndarray):
         # Log the start event
         logger.info(f"Transcribing message {message.message_id} in chat {message.chat.id}")
         # Transcribe and request word timestamps
@@ -117,6 +117,17 @@ def transcribe_and_send(message, audio_data: np.ndarray):
             vad_parameters=dict(min_silence_duration_ms=1000),
             beam_size=5,
             word_timestamps=True)
+        if(STREAM_ENABLED):
+            stream_and_send(message, segments)
+        else:
+            send(message, segments)
+        # Log the finish event
+        logger.info(f"Transcription complete for message {message.message_id} in chat {message.chat.id}")
+
+def stream_and_send(message, segments):
+    try:
+        # Set bot status to typing
+        bot.send_chat_action(message.chat.id, "typing")
         # Initialize an empty message to build our transcription
         message_transcript = ""
         last_message = bot.reply_to(message, "*")
@@ -137,9 +148,28 @@ def transcribe_and_send(message, audio_data: np.ndarray):
                     last_message = bot.reply_to(message, text=message_transcript)
         # Inform the user that the transcription has finished
         bot.send_message(message.chat.id, "Transcription complete.")
-        # Log the finish event
-        logger.info(f"Transcription complete for message {message.message_id} in chat {message.chat.id}")
 
+    except Exception as e:
+        handle_transcription_error(e, message)
+
+def send(message, segments):
+    try:
+        # Set bot status to typing
+        bot.send_chat_action(message.chat.id, "typing")
+        # Initialize an empty message to build our transcription
+        message_transcript = ""
+        for segment in segments:
+            for word in segment.words:
+                if len(message_transcript) + len(word.word) < MAX_MESSAGE_LENGTH:
+                    message_transcript += word.word
+                else:
+                    bot.reply_to(message, message_transcript)
+                    message_transcript = word.word
+        # Send the final message
+        if message_transcript:
+            bot.reply_to(message, message_transcript)
+        # Inform the user that the transcription has finished
+        bot.send_message(message.chat.id, "Transcription complete.")
     except Exception as e:
         handle_transcription_error(e, message)
 
